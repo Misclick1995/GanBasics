@@ -6,20 +6,23 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from utils.DCGAN import Discriminator, Generator, initialize_weights
+from utils.WGAN_gp import Critic, Generator, initialize_weights, gradient_penalty
 
 #### training images taken from https://www.kaggle.com/datasets/504743cb487a5aed565ce14238c6343b7d650ffd28c071f03f2fd9b25819e6c9?resource=download-directory
 
 ##hyperparameters
 device = torch.device("mps")
-lr = 2e-4
-batch_size = 128
+lr = 5e-5
+batch_size = 64
 image_size = 64
 CHANNELS_IMG = 3
 Z_DIM = 200
-NUM_EPOCHS = 5
-FEATURES_DISC = 64
+NUM_EPOCHS = 4
+FEATURES_critic = 64
 FEATURES_GEN = 64
+CRITIC_ITERATION = 5
+LAMBDA = 10
+
 
 transforms = transforms.Compose(
     [
@@ -35,14 +38,13 @@ transforms = transforms.Compose(
 dataset = datasets.ImageFolder(root='dataset/celeb_dataset', transform=transforms)
 loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 gen = Generator(Z_DIM, CHANNELS_IMG, FEATURES_GEN).to(device)
-disc = Discriminator(CHANNELS_IMG, FEATURES_DISC).to(device)
+critic = Critic(CHANNELS_IMG, FEATURES_critic).to(device)
 initialize_weights(gen)
-initialize_weights(disc)
+initialize_weights(critic)
 
-opt_gen = optim.Adam(gen.parameters(), lr=lr, betas=(0.5, 0.999))
-opt_disc = optim.Adam(disc.parameters(), lr=lr, betas=(0.5, 0.999))
+opt_gen = optim.Adam(gen.parameters(), lr=lr, betas=(0.0, 0.9))
+opt_critic = optim.Adam(critic.parameters(), lr=lr, betas=(0.0, 0.9))
 
-criterion = nn.BCELoss()
 
 fixed_noise = torch.randn(32, Z_DIM, 1, 1).to(device)
 writer_real = SummaryWriter(
@@ -54,33 +56,33 @@ writer_fake = SummaryWriter(
 step = 0
 
 gen.train()
-disc.train()
+critic.train()
 
 for epoch in range(NUM_EPOCHS):
     for batch_idx, (real, _) in enumerate(loader):
         real = real.to(device)
-        noise = torch.randn((batch_size, Z_DIM, 1, 1)).to(device)
-
-        disc_real = disc(real).reshape(-1)
-        lossD_real = criterion(disc_real, torch.ones_like(disc_real))
-        fake = gen(noise)
-        disc_fake = disc(fake).reshape(-1)
-        lossD_fake = criterion(disc_fake, torch.zeros_like(disc_fake))
-        lossD = (lossD_real +lossD_fake)/2
-        disc.zero_grad()
-        lossD.backward(retain_graph=True)
-        opt_disc.step()
-
-
-        output = disc(fake).reshape(-1)
-        lossG = criterion(output, torch.ones_like(output))
+        
+        for _ in range(CRITIC_ITERATION):
+            noise = torch.randn((batch_size, Z_DIM, 1, 1)).to(device)
+            critic_real = critic(real).reshape(-1)
+            fake = gen(noise)
+            critic_fake = critic(fake).reshape(-1)
+            gp = gradient_penalty(critic, real, fake, device=device)
+            lossC = -(torch.mean(critic_real) - torch.mean(critic_fake)) + LAMBDA*gp
+            critic.zero_grad()
+            lossC.backward(retain_graph=True)
+            opt_critic.step()
+        
+        output = critic(fake).reshape(-1)
+        lossG = -torch.mean(output)
         gen.zero_grad()
         lossG.backward()
         opt_gen.step()
+        
         if batch_idx == 0:
             print(
                 f"Epoch [{epoch}/{NUM_EPOCHS}] \\ "
-                f"loss D: {lossD:.4f}, loss G: {lossG:.4f}"
+                f"loss C: {lossC:.4f}, loss G: {lossG:.4f}"
             )
             with torch.no_grad():
                 fake = gen(fixed_noise)
