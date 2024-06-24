@@ -17,7 +17,7 @@ batch_size = 64
 image_size = 64
 CHANNELS_IMG = 3
 Z_DIM = 200
-NUM_EPOCHS = 4
+NUM_EPOCHS = 8
 FEATURES_critic = 64
 FEATURES_GEN = 64
 CRITIC_ITERATION = 5
@@ -26,7 +26,7 @@ LAMBDA = 10
 
 transforms = transforms.Compose(
     [
-        transforms.Resize(image_size),
+        transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(
             [0.5 for _ in range(CHANNELS_IMG)], [0.5 for _ in range(CHANNELS_IMG)],
@@ -36,7 +36,8 @@ transforms = transforms.Compose(
 
 # dataset = datasets.MNIST(root="dataset/", train=True, transform=transforms, download=True)
 dataset = datasets.ImageFolder(root='dataset/celeb_dataset', transform=transforms)
-loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+# print(dataset)
+loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 gen = Generator(Z_DIM, CHANNELS_IMG, FEATURES_GEN).to(device)
 critic = Critic(CHANNELS_IMG, FEATURES_critic).to(device)
 initialize_weights(gen)
@@ -48,10 +49,10 @@ opt_critic = optim.Adam(critic.parameters(), lr=lr, betas=(0.0, 0.9))
 
 fixed_noise = torch.randn(32, Z_DIM, 1, 1).to(device)
 writer_real = SummaryWriter(
-    f"logs/real"
+    f"logs/wgan_gp/real"
 )
 writer_fake = SummaryWriter(
-    f"logs/fake"
+    f"logs/wgan_gp/fake"
 )
 step = 0
 
@@ -67,6 +68,7 @@ for epoch in range(NUM_EPOCHS):
             critic_real = critic(real).reshape(-1)
             fake = gen(noise)
             critic_fake = critic(fake).reshape(-1)
+            # print(real.size(), fake.size())
             gp = gradient_penalty(critic, real, fake, device=device)
             lossC = -(torch.mean(critic_real) - torch.mean(critic_fake)) + LAMBDA*gp
             critic.zero_grad()
@@ -84,17 +86,17 @@ for epoch in range(NUM_EPOCHS):
                 f"Epoch [{epoch}/{NUM_EPOCHS}] \\ "
                 f"loss C: {lossC:.4f}, loss G: {lossG:.4f}"
             )
-            with torch.no_grad():
-                fake = gen(fixed_noise)
-                # data = real.reshape(-1, 1, 28, 28)
-                img_grid_fake = torchvision.utils.make_grid(fake[:32], normalize=True)
-                img_grid_real = torchvision.utils.make_grid(real[:32], normalize=True)
+        with torch.no_grad():
+            fake = gen(fixed_noise)
+            # data = real.reshape(-1, 1, 28, 28)
+            img_grid_fake = torchvision.utils.make_grid(fake[:32], normalize=True)
+            img_grid_real = torchvision.utils.make_grid(real[:32], normalize=True)
 
-                writer_fake.add_image(
-                    "Fake Images", img_grid_fake, global_step=step
-                )
+            writer_fake.add_image(
+                "Fake Images", img_grid_fake, global_step=step
+            )
 
-                writer_real.add_image(
-                    "Real Images", img_grid_real, global_step=step
-                )
-                step += 1
+            writer_real.add_image(
+                "Real Images", img_grid_real, global_step=step
+            )
+            step += 1
